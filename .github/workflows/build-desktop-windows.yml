@@ -1,0 +1,82 @@
+name: build desktop windows
+
+# Builds an unsigned Windows x64 desktop app from the dispatched ref: the unpacked app and the NSIS installer.
+# release.yml owns signed and published builds; this workflow exists to try a branch without cutting a release.
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: blacksmith-4vcpu-windows-2025
+    timeout-minutes: 90
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+
+      - name: Set up Bun
+        uses: ./.github/actions/setup-bun
+
+      # The desktop bundles the CLI from this commit. The x64 desktop looks for @opencode/cli-windows-x64-baseline,
+      # so that is the target to build. Without OPENCODE_MODELS_SNAPSHOT the committed catalog is bundled, and the
+      # install step is skipped because this only needs the Windows native packages the workspace install provides.
+      - name: Build CLI
+        working-directory: packages/cli
+        run: bun run script/build.ts --skip-install
+        env:
+          OPENCODE_TARGET: windows-x64-baseline
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Build desktop app
+        working-directory: packages/desktop
+        run: bun run build
+        env:
+          OPENCODE_TARGET: windows-x64
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Pack the unpacked app
+        working-directory: packages/desktop
+        timeout-minutes: 60
+        run: bun run pack
+        env:
+          OPENCODE_TARGET: windows-x64
+
+      # pack.ts deletes dist/desktop, so stage the app outside it before packing the installer around it.
+      - name: Stage the unpacked app
+        run: |
+          mkdir -p "$RUNNER_TEMP/app"
+          cp -r dist/desktop/app "$RUNNER_TEMP/app/app"
+
+      - name: Upload the unpacked app
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opencode-desktop-win-x64
+          path: ${{ runner.temp }}/app/app
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Pack the installer
+        working-directory: packages/desktop
+        timeout-minutes: 30
+        run: bun run pack
+        env:
+          OPENCODE_TARGET: windows-x64
+          OPENCODE_DESKTOP_APP: ${{ runner.temp }}/app/app
+
+      - name: Upload the installer
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: opencode-desktop-win-x64-installer
+          path: dist/desktop/*.exe
+          if-no-files-found: error
+          retention-days: 7
