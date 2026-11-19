@@ -18,7 +18,9 @@ defaults:
 
 jobs:
   build:
-    runs-on: blacksmith-4vcpu-windows-2025
+    # The deploy workflows skip on forks because they publish. This one builds an artifact, so it runs anywhere:
+    # Blacksmith where the repository has the runner, GitHub-hosted elsewhere.
+    runs-on: ${{ github.repository == 'anomalyco/opencode' && 'blacksmith-4vcpu-windows-2025' || 'windows-2025' }}
     timeout-minutes: 90
     steps:
       - name: Check out repository
