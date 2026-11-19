@@ -22,6 +22,13 @@ const RemoteModel = Schema.Struct({
 
 const Response = Schema.Struct({ models: Schema.Array(RemoteModel) })
 
+type DiscoveredModel = typeof RemoteModel.Type & { context: number | null }
+
+// LM Studio reports the context a model was loaded with only while an instance is loaded. It loads a model
+// just in time with that saved configuration, so an unloaded model (for example after its idle TTL expired)
+// must keep the context it was last loaded with instead of the architecture maximum, which LM Studio rejects.
+const loadedContexts = new Map<string, Map<string, number>>()
+
 export const make = createLocalProviderPlugin({
   id: "opencode.provider.lmstudio",
   providerID: "lmstudio",
@@ -31,9 +38,19 @@ export const make = createLocalProviderPlugin({
   discover: (client) =>
     Effect.gen(function* () {
       const response = yield* client.getJson("/api/v1/models", Response)
+      const contexts = loadedContexts.get(client.root) ?? new Map<string, number>()
+      loadedContexts.set(client.root, contexts)
       return response.models
         .filter((model) => (model.type === "llm" || model.type === "decision") && model.key.length > 0)
         .toSorted((a, b) => a.key.localeCompare(b.key))
+        .map((item): DiscoveredModel => {
+          const loaded =
+            item.loaded_instances.length === 0
+              ? undefined
+              : Math.min(...item.loaded_instances.map((instance) => instance.config.context_length))
+          if (loaded !== undefined) contexts.set(item.key, loaded)
+          return { ...item, context: loaded ?? contexts.get(item.key) ?? item.max_context_length }
+        })
     }),
   model: (item) => ({
     id: item.key,
@@ -42,10 +59,7 @@ export const make = createLocalProviderPlugin({
     type: item.type === "decision" ? "decision" : "chat",
     tools: item.capabilities?.trained_for_tool_use,
     vision: item.capabilities?.vision ?? item.has_vision_adapter,
-    context:
-      item.loaded_instances.length === 0
-        ? item.max_context_length
-        : Math.min(...item.loaded_instances.map((instance) => instance.config.context_length)),
+    context: item.context,
   }),
 })
 

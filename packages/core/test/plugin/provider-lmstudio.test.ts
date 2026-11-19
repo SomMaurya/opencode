@@ -131,6 +131,47 @@ describe("LMStudioPlugin", () => {
     ),
   )
 
+  it.live("keeps the loaded context after LM Studio unloads a model", () =>
+    Effect.acquireUseRelease(
+      Effect.sync(() => {
+        const model = {
+          type: "llm",
+          key: "qwen/qwen3-coder-context",
+          display_name: "Qwen 3 Coder",
+          loaded_instances: [{ config: { context_length: 8192 } }],
+          max_context_length: 262_144,
+        }
+        return { model, server: Bun.serve({ port: 0, fetch: () => Response.json({ models: [model] }) }) }
+      }),
+      ({ model, server }) =>
+        Effect.gen(function* () {
+          const modelState = yield* Model.Service
+          const providerID = Provider.ID.make("lmstudio")
+          const modelID = Model.ID.make("qwen/qwen3-coder-context")
+          yield* addPlugin(server.url.origin, "5 millis")
+          expect(
+            yield* eventually(modelState.get(providerID, modelID), (item) => item?.limit.context === 8192),
+          ).toMatchObject({ limit: { context: 8192 } })
+
+          // LM Studio lists only loaded instances, so an unloaded model would otherwise report its
+          // architecture maximum and request more context than LM Studio will load it with.
+          model.loaded_instances = []
+          model.display_name = "Qwen 3 Coder (unloaded)"
+          expect(
+            yield* eventually(modelState.get(providerID, modelID), (item) => item?.name === "Qwen 3 Coder (unloaded)"),
+          ).toMatchObject({ name: "Qwen 3 Coder (unloaded)", limit: { context: 8192 } })
+
+          // A later load with a different context still wins.
+          model.loaded_instances = [{ config: { context_length: 4096 } }]
+          model.display_name = "Qwen 3 Coder (reloaded)"
+          expect(
+            yield* eventually(modelState.get(providerID, modelID), (item) => item?.name === "Qwen 3 Coder (reloaded)"),
+          ).toMatchObject({ name: "Qwen 3 Coder (reloaded)", limit: { context: 4096 } })
+        }),
+      ({ server }) => Effect.promise(() => server.stop(true)),
+    ),
+  )
+
   it.live("refreshes the catalog when LM Studio models change", () =>
     Effect.acquireUseRelease(
       Effect.sync(() => {

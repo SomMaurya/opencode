@@ -442,7 +442,8 @@ provider ID:
 ```
 
 OpenCode refreshes the inventory in the background and reads context, vision, and tool-use capabilities from LM Studio.
-Embedding models are excluded.
+Embedding models are excluded. A model that is not currently loaded keeps the context it was last loaded with, so a
+saved context length below the model maximum is respected.
 
 For another host or port, set the OpenAI-compatible URL. Models are still discovered automatically:
 
